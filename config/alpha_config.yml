@@ -1,0 +1,14 @@
+# config/alpha_config.yaml
+env:
+  data_dir: "./data/qlib_data/us_data" # 目录名改为 us_data
+  region: "us" # us 代表美股市场
+
+universe:
+  market: "sp500" # 测试股票池：标普500指数 (S&P 500)
+  start_date: "2020-01-01" # 美股数据我们拉长一点，从2020年开始
+  end_date: "2023-12-31"
+
+# 你的本地 WorldQuant Brain 公式库
+alphas:
+  alpha_001: "Rank($close)"
+  alpha_012: "Sign($volume - Ref($volume, 1)) * (-1 * ($close - Ref($close, 1)))"
