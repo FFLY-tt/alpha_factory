@@ -6,6 +6,13 @@ from src.ast.ast_nodes import FactorNode, LeafNode, UnaryNode, BinaryNode, Terna
 from src.mining.seed_library import load_seed_factors
 
 
+# beam_search,负责加载种子库，通过一元，二元算子暴力交叉变异出下一代公式，同时调用规则引擎提出不合法的垃圾
+# 1.装填弹药 (_load_and_convert_seeds)：
+# 开局时，把 seed_library.py 里那 62 个初始指标（比如 $close, $volume, mom_intraday）加载进来，包装成最初始的叶子节点（LeafNode）。
+# 2.盲目变异（广度探索） (generate_candidates)：
+# 这是它原本就在干的事。 它是引擎的主力。它把手里的节点两两配对，尝试加上 +, -, Corr, Max 等算子。遇到量纲冲突（比如价格加成交量），rule_engine.py 会静默拦截。最终它会从几万种组合中，盲目但符合物理定律地生成出 3000 个合法的候选因子，丢给后面的法庭去评判。
+# 3.定向定做（深度挖掘） (generate_market_state_variants & generate_smoothing_variants)：
+# 这就是我们刚才搬进来的新能力。 当后面的法庭已经评判出“这几个因子是好苗子”时，调度中心会把这几个精英重新送回兵工厂，要求兵工厂对它们进行“定向改装”（套上平滑算子，或者加上大盘条件）。
 class BeamSearchEngine:
     def __init__(self, beam_width: int = 50, ts_params: List[int] = None):
         """
@@ -92,6 +99,79 @@ class BeamSearchEngine:
             unique_candidates = random.sample(unique_candidates, max_eval)
 
         return unique_candidates
+
+    # 大盘状态衍生，强行在主流程里造出了“牛市版”和“高波动版”因子
+    def generate_market_state_variants(self, base_nodes: List[FactorNode]) -> List[FactorNode]:
+        """
+        模块四衍生：为基础因子生成大盘状态（牛市/高波动）择时版本
+        """
+        MKT_RET_EXPR = "Mean($close / Ref($close, 1) - 1, 20)"
+        VOL_EXPR = "Std($close / Ref($close, 1) - 1, 20)"
+
+        derived = []
+        # 将外部宏观条件转化为合法的 AST 叶子节点
+        mkt_ret_node = LeafNode("mkt_ret_20d", f"Ref({MKT_RET_EXPR}, 1)", DimType.RATIO)
+        zero_node = LeafNode("zero", "0", DimType.RATIO)
+        vol_now = LeafNode("vol_20d", f"Ref({VOL_EXPR}, 1)", DimType.RATIO)
+        vol_ma = LeafNode("vol_ma_60d", f"Ref(Mean({VOL_EXPR}, 60), 1)", DimType.RATIO)
+
+        # 构建逻辑判断节点
+        bull_cond = BinaryNode(">", mkt_ret_node, zero_node)
+        high_vol_cond = BinaryNode(">", vol_now, vol_ma)
+
+        for node in base_nodes:
+            if node.dim_type == DimType.BOOLEAN:
+                continue
+
+            zero_factor = LeafNode("zero_factor", "0", node.dim_type)
+
+            # 1. 衍生：牛市择时版
+            try:
+                bn = TernaryNode(bull_cond, node, zero_factor)
+                bn.name = f"BULL_{node.name[:30]}"
+                derived.append(bn)
+            except ValueError:
+                pass
+
+            # 2. 衍生：高波动反转版
+            if node.dim_type == DimType.RATIO:
+                try:
+                    neg_one = LeafNode("neg_one", "-1", DimType.RATIO)
+                    rev = BinaryNode("*", neg_one, node)
+                    hv = TernaryNode(high_vol_cond, rev, node)
+                    hv.name = f"HV_REV_{node.name[:25]}"
+                    derived.append(hv)
+                except ValueError:
+                    pass
+
+        print(f"   🌐 [引擎] 定向衍生：{len(base_nodes)} 个基础因子 → 产出 {len(derived)} 个状态择时因子")
+        return derived
+
+    # 平滑变体生成：通过字符串替换 Mean({expr}, 5) 的方式，强行批量生成衍生因子
+    def generate_smoothing_variants(self, base_nodes: List[FactorNode], windows: List[int] = None) -> List[FactorNode]:
+        """
+        自动精调衍生：为优秀的因子生成极其密集的平滑变体（替代原来的字符串 replace）
+        """
+        windows = windows or [5, 10, 12, 15, 20]
+        derived = []
+
+        for node in base_nodes:
+            if node.dim_type == DimType.BOOLEAN:
+                continue
+            for d in windows:
+                try:
+                    # 严格使用 AST 生成 Mean 变体
+                    mean_node = UnaryNode("Mean", node, d)
+                    derived.append(mean_node)
+
+                    # 严格使用 AST 生成 WMA 变体 (对应 Qlib 的 decay_linear)
+                    wma_node = UnaryNode("WMA", node, d)
+                    derived.append(wma_node)
+                except ValueError:
+                    pass
+
+        print(f"   🔧 [引擎] 细粒度精调：为 {len(base_nodes)} 个因子生成了 {len(derived)} 个平滑变体")
+        return derived
 
 
 # =========== 引擎空转自测 (不连 Qlib) ===========

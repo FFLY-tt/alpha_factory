@@ -345,3 +345,66 @@ def auto_correct_direction(
             "needs_negation":         False,
             "direction":              "原始方向（直接提交即可）"
         }
+
+
+# 将这部分追加到 src/evaluation/metrics_calc.py 的末尾
+
+from data_pipeline.data_source import fetch_factor_data
+
+
+def evaluate_single_factor_comprehensive(df: pd.DataFrame, factor_name: str) -> Dict:
+    """
+    单因子综合评估（含方向自动修正与复合 Fitness）
+    这是对外的标准评估组件，屏蔽底层各种零散算子。
+    """
+    metrics = compute_factor_sharpe(df, factor_name, quantiles=5, cost_bps=5.0)
+    mean_ic, icir = calculate_ic_stability(df, factor_name)
+    direction = auto_correct_direction(
+        ic=mean_ic,
+        sharpe_net=metrics['sharpe_net'],
+        sharpe_gross=metrics['sharpe_gross']
+    )
+    fit = calculate_local_fitness(
+        sharpe=direction['corrected_sharpe_net'],
+        turnover=metrics['turnover'],
+        max_corr=0.0,
+        icir=abs(icir)
+    )
+    return {
+        "sharpe_net_raw": metrics['sharpe_net'],
+        "sharpe_gross_raw": metrics['sharpe_gross'],
+        "sharpe_net": direction['corrected_sharpe_net'],
+        "sharpe_gross": direction['corrected_sharpe_gross'],
+        "needs_negation": direction['needs_negation'],
+        "direction_note": direction['direction'],
+        "ann_ret": metrics['ann_ret'],
+        "max_dd": metrics['max_dd'],
+        "turnover": metrics['turnover'],
+        "ic": mean_ic,
+        "icir": icir,
+        "fitness": fit['fitness'],
+        "high_turnover": metrics.get('high_turnover', False),
+    }
+
+
+def batch_evaluate_formulas(formulas: dict, pool: str, start_date: str, end_date: str) -> Dict[str, Dict]:
+    """
+    终极评估入口：接收公式字典，自动取数并返回全体评估报告。
+    """
+    if not formulas:
+        return {}
+
+    fetch_dict = dict(formulas)
+    # 强制加入成交量用于某些指标（如换手）的底层需求
+    if "_vol_raw_" not in fetch_dict:
+        fetch_dict["_vol_raw_"] = "$volume"
+
+    # 自动调用 Qlib 取数
+    df = fetch_factor_data(fetch_dict, pool, start_date, end_date)
+
+    results = {}
+    for fname in formulas.keys():
+        if fname in df.columns:
+            results[fname] = evaluate_single_factor_comprehensive(df, fname)
+
+    return results
