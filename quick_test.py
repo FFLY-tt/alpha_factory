@@ -39,10 +39,10 @@ IS_END_DATE    = "2017-12-31"
 OOS_START_DATE = "2018-01-01"   # 样本外：最终验证（含2018熊市/2019反弹/2020新冠）
 OOS_END_DATE   = "2020-11-10"
 
-TARGET_DEPTH   = 3
-BEAM_WIDTH     = 8    # 适当缩小控制时长（原10）
+TARGET_DEPTH   = 4
+BEAM_WIDTH     = 12    # 适当缩小控制时长（原10）
 CORR_THRESHOLD = 0.8
-MAX_EVAL       = 30   # 适当缩小控制时长（原50）
+MAX_EVAL       = 60   # 适当缩小控制时长（原50）
 ENABLE_MODULE_4 = False
 SHARPE_PRINT_THRESHOLD = 1.0
 
