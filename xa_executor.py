@@ -1,7 +1,7 @@
-# quick_test.py
+# xa_executor.py
 """
 快速 A/B 对照实验：验证 7 模块流水线对深度-3 复杂因子的提升效果
-(重构版：职责清晰的调度流水线)
+(重构版：职责清晰的调度流水线 - XA拓荒执行器)
 """
 import warnings
 warnings.filterwarnings("ignore")
@@ -23,8 +23,8 @@ from src.evaluation.metrics_calc import (
 # 主流程 (高度结构化的调度流水线)
 # ==============================================================================
 
-# 【外科手术修改】：仅仅扩充了参数列表，直接接收大写变量，保证下方逻辑 0 改动
-def run_alpha_pipeline(
+# 【外科手术修改】：更名为 run_xa_pipeline，作为 XA 模式的专属执行器
+def run_xa_pipeline(
     engine, db, batch_id, initial_beam, start_depth, target_depth,
     POOL, IS_START_DATE, IS_END_DATE, OOS_START_DATE, OOS_END_DATE,
     MAX_EVAL, BEAM_WIDTH, CORR_THRESHOLD, TURNOVER_CAP,
@@ -32,7 +32,7 @@ def run_alpha_pipeline(
 ):
     t0 = time.time()
     print("=" * 70)
-    print(f"⚙️ 启动 AlphaForge 加工流水线 (Depth {start_depth} -> {target_depth}，换手上限{TURNOVER_CAP})")
+    print(f"⚙️ 启动 AlphaForge XA 拓荒流水线 (Depth {start_depth} -> {target_depth}，换手上限{TURNOVER_CAP})")
     print("=" * 70)
 
     # ---------------------------------------------------------

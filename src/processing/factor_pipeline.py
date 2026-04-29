@@ -1,7 +1,7 @@
 # src/processing/factor_pipeline.py
 """
 因子精炼管道：整合模块一（流动性过滤）、模块三（选择性中性化）、模块六（组合筛选）
-模块二的 Winsorize+Rank 在 run() 中调用，模块四在 main.py 中由 build_market_state_alphas 提供
+模块二的 Winsorize+Rank 在 run() 中调用，模块四在 alpha_forge_entry.py 中由 build_market_state_alphas 提供
 修复：未来信息、选择性稳健化、正确执行顺序
 """
 import pandas as pd

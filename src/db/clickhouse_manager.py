@@ -132,3 +132,12 @@ class ClickHouseManager:
         column_names = self._get_column_names()
         self.client.insert('factors_wide', rows, column_names=column_names)
         print(f"🧬 [DB] 已动态记录 {len(seed_nodes)} 个 T1 原始种子指标。")
+
+    def get_existing_hashes(self, batch_id: int, depth: int) -> set:
+        """【新增】：获取数据库中已经算过的因子 Hash 集合 (用于断点续传/去重)"""
+        try:
+            query = f"SELECT expr_hash FROM factors_wide WHERE batch_id = {batch_id} AND depth = {depth}"
+            result = self.client.query(query)
+            return {row[0] for row in result.result_rows}
+        except Exception:
+            return set()

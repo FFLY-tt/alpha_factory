@@ -173,6 +173,75 @@ class BeamSearchEngine:
         print(f"   🔧 [引擎] 细粒度精调：为 {len(base_nodes)} 个因子生成了 {len(derived)} 个平滑变体")
         return derived
 
+    def generate_crossover_candidates(self, pool_a, pool_b, max_eval: int, target_depth: int):
+        """
+        【真·遗传规划 (GP) 引擎】：XC 模式专属，基于 AST 子树交换的交叉算子
+        """
+        import random
+        import hashlib
+        from src.ast.ast_nodes import LeafNode
+        from src.rules.rule_engine import DimType
+
+        # 🎯 引入我们手搓的 AST 手术刀
+        try:
+            from src.ast.ast_crossover import parse_formula, crossover_trees
+        except ImportError:
+            print("❌ 找不到 src.ast.ast_crossover，请确保该文件存在！")
+            return []
+
+        candidates = []
+        attempts = 0
+        seen_exprs = set()  # 局部的防重哈希表
+
+        print(f"   🔬 正在基因实验室中进行 AST 子树重组 (最大允许深度: {target_depth})...")
+
+        # 尝试次数上限设为 max_eval 的 10 倍，因为有些杂交可能不合法被废弃
+        while len(candidates) < max_eval and attempts < max_eval * 10:
+            attempts += 1
+
+            # 1. 锦标赛选择 (Tournament Selection) 的极简版：
+            # 因为传入的 pool 已经是按 Fitness 降序排列的精英了，
+            # 为了保证多样性，我们在精英池中随机挑选双亲。
+            parent_a = random.choice(pool_a)
+            parent_b = random.choice(pool_b)
+
+            if parent_a.expr_str == parent_b.expr_str:
+                continue
+
+            # 2. 字符串转 AST 树
+            tree_a = parse_formula(parent_a.expr_str)
+            tree_b = parse_formula(parent_b.expr_str)
+
+            # 3. 核心基因重组 (带基因锁)
+            child_tree_1, child_tree_2 = crossover_trees(tree_a, tree_b, max_depth=target_depth)
+
+            # 4. AST 树转回 Qlib 字符串
+            expr_1 = child_tree_1.to_string()
+            expr_2 = child_tree_2.to_string()
+
+            # 5. 验证与收编入库
+            for expr in [expr_1, expr_2]:
+                if len(candidates) >= max_eval:
+                    break
+
+                # 防重：不要和父本完全一样，也不要和刚生成的兄弟一样
+                if expr in (parent_a.expr_str, parent_b.expr_str) or expr in seen_exprs:
+                    continue
+
+                seen_exprs.add(expr)
+
+                new_node = LeafNode(name=f"XC_GP_gen_{attempts}", expr_str=expr, dim_type=DimType.RATIO)
+
+                # 🎯 极其重要的血统追踪！记录这是哪两个公式杂交出来的
+                new_node.parent1_hash = int(hashlib.md5(parent_a.expr_str.encode('utf-8')).hexdigest()[:15], 16)
+                new_node.parent2_hash = int(hashlib.md5(parent_b.expr_str.encode('utf-8')).hexdigest()[:15], 16)
+                new_node.node_count = expr.count('(') + 1  # 简单估算节点数
+
+                candidates.append(new_node)
+
+        print(f"   🧬 基因重组完成：碰撞 {attempts} 次，成功培育合法超级后代 {len(candidates)} 个")
+        return candidates
+
 
 # =========== 引擎空转自测 (不连 Qlib) ===========
 if __name__ == "__main__":
