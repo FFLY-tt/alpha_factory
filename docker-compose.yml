@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: alpha_forge_clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=root
+    volumes:
+      # 【核心修复】：不再映射到本地 ./ch_data，而是使用 Docker 托管卷！
+      - clickhouse_data:/var/lib/clickhouse  
+      - clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: unless-stopped
+
+# 声明 Docker 内部的原生存储卷
+volumes:
+  clickhouse_data:
+  clickhouse_logs:

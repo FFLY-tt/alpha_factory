@@ -2,16 +2,8 @@
 """
 快速 A/B 对照实验：验证 7 模块流水线对深度-3 复杂因子的提升效果
 (重构版：职责清晰的调度流水线)
-
-步骤：
-Step 1: IS 样本内波束搜索（挖出基线因子）
-Step 2: A组评估（基线）
-Step 3: B组评估（精炼管道处理）
-Step 4: 定向精调（平滑探索 + 市场状态衍生，并选出 IS 最优版本）
-Step 5: OOS 样本外验证（使用精调后的最终版本）
 """
 import warnings
-
 warnings.filterwarnings("ignore")
 
 import os
@@ -21,60 +13,35 @@ from data_pipeline.data_source import init_qlib_engine, fetch_factor_data
 from src.mining.beam_search import BeamSearchEngine
 
 from src.processing.factor_pipeline import FactorPipeline
-# quick_test.py 顶部导入修改
 from src.evaluation.metrics_calc import (
     select_top_k_orthogonal,
-    evaluate_single_factor_comprehensive, # <- 新增
-    batch_evaluate_formulas               # <- 新增
+    evaluate_single_factor_comprehensive,
+    batch_evaluate_formulas
 )
-
-# ==============================================================================
-# 配置
-# ==============================================================================
-POOL = "sp500"
-
-IS_START_DATE = "2010-01-04"
-IS_END_DATE = "2017-12-31"
-OOS_START_DATE = "2018-01-01"
-OOS_END_DATE = "2020-11-10"
-
-TARGET_DEPTH = 5
-BEAM_WIDTH = 60
-CORR_THRESHOLD = 0.6
-MAX_EVAL = 800
-
-# 统一门槛配置
-TURNOVER_CAP = 1.5
-FITNESS_MIN_IS = 0.5
-SHARPE_MIN_IS = 1.0
-FITNESS_MIN_OOS = 0.3
-SHARPE_MIN_OOS = 0.8
-
-# 打印阈值
-SHARPE_PRINT_THRESHOLD = 1.0
-
 
 # ==============================================================================
 # 主流程 (高度结构化的调度流水线)
 # ==============================================================================
 
-def main():
+# 【外科手术修改】：仅仅扩充了参数列表，直接接收大写变量，保证下方逻辑 0 改动
+def run_alpha_pipeline(
+    engine, db, batch_id, initial_beam, start_depth, target_depth,
+    POOL, IS_START_DATE, IS_END_DATE, OOS_START_DATE, OOS_END_DATE,
+    MAX_EVAL, BEAM_WIDTH, CORR_THRESHOLD, TURNOVER_CAP,
+    FITNESS_MIN_OOS, SHARPE_MIN_OOS
+):
     t0 = time.time()
     print("=" * 70)
-    print(f"⚡ A/B 对照实验（深度{TARGET_DEPTH}，换手上限{TURNOVER_CAP}）")
+    print(f"⚙️ 启动 AlphaForge 加工流水线 (Depth {start_depth} -> {target_depth}，换手上限{TURNOVER_CAP})")
     print("=" * 70)
-
-    cur = os.path.dirname(os.path.abspath(__file__))
-    init_qlib_engine(os.path.join(cur, "data", "qlib_data", "us_data"))
-    engine = BeamSearchEngine(beam_width=BEAM_WIDTH)
 
     # ---------------------------------------------------------
     # Step 1：IS 样本内波束搜索
     # ---------------------------------------------------------
     print(f"\n🌱 [Step 1] 波束搜索（IS: {IS_START_DATE} ~ {IS_END_DATE}）...")
-    current_beam = engine.seed_nodes
+    current_beam = initial_beam
 
-    for depth in range(2, TARGET_DEPTH + 1):
+    for depth in range(start_depth, target_depth + 1):
         print(f"\n   🧬 深度 {depth}...")
         candidates = engine.generate_candidates(current_beam, max_eval=MAX_EVAL)
         formulas = {n.name: n.expr_str for n in candidates}
@@ -87,6 +54,22 @@ def main():
             candidates, ic_input, k=BEAM_WIDTH, corr_threshold=CORR_THRESHOLD
         )
         print(f"   留存精英: {len(current_beam)} 个")
+        # 🎯 ================= 【新增：每层实时落库】 ================= 🎯
+        print(f"   💾 正在将 Depth {depth} 的 {len(current_beam)} 个精英实时落库...")
+        formulas_current = {n.name: n.expr_str for n in current_beam}
+        current_layer_results = batch_evaluate_formulas(formulas_current, POOL, IS_START_DATE, IS_END_DATE)
+
+        db_layer_input = {}
+        for node in current_beam:
+            if node.name in current_layer_results:
+                db_layer_input[node.expr_str] = {
+                    "node": node,
+                    "is_res": current_layer_results[node.name]
+                }
+
+        # 写入数据库，打上该层的专属标签
+        db.save_factor_batch(batch_id, "XA_MINING", depth, db_layer_input, variant_tag=f"depth_{depth}_elite")
+        # 🎯 ======================================================== 🎯
 
     print(f"\n✅ 挖掘完毕，获得精英因子: {len(current_beam)} 个")
 
@@ -110,9 +93,16 @@ def main():
     print("🅱️  [Step 3] 组 B：精炼管道清洗（IS 期）")
 
     # 重新取数给 pipeline
-    df_eval = fetch_factor_data(formulas_a, POOL, IS_START_DATE, IS_END_DATE)
+    fetch_dict = formulas_a.copy()
+    fetch_dict["_vol_raw_"] = "$volume"  # 【核心修复】：告诉 Qlib 顺手把成交量也取出来！
+
+    df_eval = fetch_factor_data(fetch_dict, POOL, IS_START_DATE, IS_END_DATE)
     factor_names = list(a_results.keys())
-    elite_df = df_eval[factor_names + ["target_ret", "_vol_raw_"]].copy()
+
+    # 容错提取：只提取 df_eval 中实际存在的列，防止 KeyError
+    cols_to_extract = factor_names + ["target_ret", "_vol_raw_"]
+    available_cols = [c for c in cols_to_extract if c in df_eval.columns]
+    elite_df = df_eval[available_cols].copy()
 
     pipeline = FactorPipeline(df=elite_df, factor_cols=factor_names, volume_col="_vol_raw_")
     refined_df = pipeline.run(
@@ -151,7 +141,6 @@ def main():
         best_fit = best_res.get('fitness', -999) if best_res.get('turnover', 999) < TURNOVER_CAP else -999
 
         # 寻找该因子的所有变体（通过名称匹配，或者更好的方式是通过血统字段）
-        # 这里为了简化，假设变体名称包含基础因子的简写
         my_variants = [n for n in all_variants if base_name[:20] in n.name]
 
         for v_node in my_variants:
@@ -182,6 +171,8 @@ def main():
     print(f"  {'-' * 40}─┼─{'-' * 8}─{'-' * 7}─┼─{'-' * 8}─{'-' * 7}──────────")
 
     qualified_count = 0
+    final_qualified = {}
+
     for base_name, info in best_is_versions.items():
         v_name = info["node"].name
         is_r = info["res"]
@@ -202,13 +193,17 @@ def main():
             mark = "✅ 稳健"
         else:
             mark = "❌ 淘汰"
+            # 将合格的因子信息打包
+        final_qualified[v_name] = {
+            "node": info["node"],
+            "is_res": is_r,
+            "oos_res": oos_r
+        }
 
         print(f"  {v_name[:40]:<40} │ {is_r['sharpe_net']:>+8.3f} {is_r['fitness']:>+7.4f} │ "
               f"{oos_r['sharpe_net']:>+8.3f} {oos_r['fitness']:>+7.4f}  {mark}")
 
     print(f"\n🎉 验证完毕！合格因子数：{qualified_count} / {len(best_is_versions)}")
-    print(f"⏱️ 总耗时: {time.time() - t0:.1f} 秒")
+    print(f"⏱️ 流水线执行耗时: {time.time() - t0:.1f} 秒")
 
-
-if __name__ == "__main__":
-    main()
+    return final_qualified
