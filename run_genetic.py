@@ -42,7 +42,7 @@ from dashboard import Dashboard
 # ══════════════════════════════════════════════════════════════════════════════
 POOL = "sp500"
 
-TRAIN_START = "2013-01-01"
+TRAIN_START = "2010-01-01"
 TRAIN_END   = "2015-12-31"
 VAL_START   = "2016-01-01"
 VAL_END     = "2017-12-31"
@@ -52,14 +52,14 @@ OOS_START   = "2018-01-01"
 OOS_END     = "2020-11-10"
 
 # 遗传参数
-POP_SIZE    = 60
-ELITE_COUNT = 12
+POP_SIZE    = 120
+ELITE_COUNT = 24
 MAX_GENS    = 50
 PATIENCE    = 5
 
 # IS 精炼门槛
 IS_SHARPE_MIN   = 0.6
-IS_FITNESS_MIN  = 0.0
+IS_FITNESS_MIN  = 0.3
 IS_TURNOVER_MAX = 1.5
 
 # OOS 终极门槛
@@ -87,6 +87,9 @@ MKT_RET_EXPR = "Mean($close / Ref($close, 1) - 1, 20)"
 DASHBOARD_PORT = 8050
 ENABLE_DASHBOARD = True
 
+# WQ 自动提交开关（需要根目录有 .env 文件含 WQ_USERNAME / WQ_PASSWORD）
+ENABLE_WQ_SUBMIT = False   # 改为 True 开启自动提交
+
 # 精炼后取 Top N 进行 OOS 验证
 TOP_N_REFINE = 20
 
@@ -95,72 +98,20 @@ TOP_N_REFINE = 20
 # ② 学术种子因子（在此填写）
 # ══════════════════════════════════════════════════════════════════════════════
 ACADEMIC_SEED_FRAGMENTS = [
-    # ══════════════════════════════════════════════════════════════
-    # 趋势 / 动量（8个）
-    # ══════════════════════════════════════════════════════════════
-    "$close / Ref($close, 5) - 1",                              # 5日动量
-    "$close / Ref($close, 10) - 1",                             # 10日动量
-    "$close / Ref($close, 20) - 1",                             # 20日动量
-    "$close / Ref($close, 60) - 1",                             # 60日动量
-    "$close / Ref($close, 252) - 1",                            # 252日动量
-    "($close - Mean($close, 5)) / Mean($close, 5)",             # 5日均线偏离率
-    "($close - Mean($close, 10)) / Mean($close, 10)",           # 10日均线偏离率
-    "($close - Mean($close, 20)) / Mean($close, 20)",           # 20日均线偏离率
+    # ── 在下方添加你的学术因子表达式 ──────────────────────────────────────
+    # 每行一个，字符串格式，使用 Qlib 表达式语法
+    # 可用变量：$close, $open, $high, $low, $volume
+    # 可用算子：Mean, Std, WMA, Max, Min, Ref, Corr, Cov, Abs, Log, Sign, Rank
 
-    # ══════════════════════════════════════════════════════════════
-    # 反转 / 均值回归（7个）
-    # ══════════════════════════════════════════════════════════════
-    "-1 * ($close / Ref($close, 3) - 1)",                       # 3日反转
-    "-1 * ($close / Ref($close, 5) - 1)",                       # 5日反转
-    "-1 * ($close / Ref($close, 10) - 1)",                      # 10日反转
-    "-1 * ($close / Ref($close, 20) - 1)",                      # 20日反转
-    "($close - Mean($close, 20)) / Std($close, 20)",            # Z-score
-    "-1 * (($close - Mean($close, 20)) / Mean($close, 20))",    # 负均线偏离
-    "($close / Ref($close, 5) - 1) / (Std($close / Ref($close, 1) - 1, 20) + 0.001)",  # 标准化5日收益
-
-    # ══════════════════════════════════════════════════════════════
-    # 波动率（5个）
-    # ══════════════════════════════════════════════════════════════
-    "Std($close / Ref($close, 1) - 1, 5)",                      # 5日波动率
-    "Std($close / Ref($close, 1) - 1, 10)",                     # 10日波动率
-    "Std($close / Ref($close, 1) - 1, 20)",                     # 20日波动率
-    "Std($close / Ref($close, 1) - 1, 60)",                     # 60日波动率
-    "Std($close / Ref($close, 1) - 1, 252)",                    # 252日波动率
-
-    # ══════════════════════════════════════════════════════════════
-    # 成交量（5个）
-    # ══════════════════════════════════════════════════════════════
-    "$volume / Mean($volume, 5) - 1",                           # 5日相对成交量
-    "$volume / Mean($volume, 10) - 1",                          # 10日相对成交量
-    "$volume / Mean($volume, 20) - 1",                          # 20日相对成交量
-    "$volume / Ref($volume, 5) - 1",                            # 5日成交量突变
-    "$volume / Ref($volume, 20) - 1",                           # 20日成交量突变
-
-    # ══════════════════════════════════════════════════════════════
-    # 价量关系（5个）
-    # ══════════════════════════════════════════════════════════════
-    "Corr($close, $volume, 5)",                                 # 5日价量相关
-    "Corr($close, $volume, 10)",                                # 10日价量相关
-    "Corr($close, $volume, 20)",                                # 20日价量相关
-    "-1 * Corr($close, $volume, 10)",                           # 负价量相关（量价背离）
-    "-1 * ($volume / Mean($volume, 20) - 1)",                   # 成交量萎缩（背离指标）
-
-    # ══════════════════════════════════════════════════════════════
-    # 价格形态 / 影线 / 区间位置（11个）
-    # ══════════════════════════════════════════════════════════════
-    "($high - $low) / Mean(($high - $low), 10)",                # 10日相对振幅
-    "($high - $low) / $close",                                  # 单日振幅率
-    "($open / Ref($close, 1) - 1)",                             # 隔夜跳空收益率
-    "($close - $open) / ($high - $low + 0.001)",                # 收盘在日内区间的位置
-    "($close - Min($low, 20)) / (Max($high, 20) - Min($low, 20) + 0.001)",  # 20日价格区间位置
-    "$close / Min($low, 20) - 1",                               # 接近20日最低点程度
-    "($low - Min($close, $open)) / ($high - $low + 0.001)",     # 下影线占比
-    "($high - Max($open, $close)) / ($high - $low + 0.001)",    # 上影线占比
-    "$close / Max($high, 20) - 1",                              # 突破20日最高点
-    "$close / Max($high, 60) - 1",                              # 突破60日最高点
-    "$close / Max($high, 252) - 1",                             # 突破年度最高点
-    "($close - Mean($close, 60)) / Mean($close, 60)",           # 60日均线偏离
-    "($close - Mean($close, 252)) / Mean($close, 252)",         # 年线偏离
+    # 示例（取消注释后生效）：
+    # "($close / Mean($close, 20)) - 1",                          # 价格偏离20日均线
+    # "Std($close / Ref($close, 1) - 1, 20)",                     # 20日历史波动率
+    # "($close - Mean($close, 5)) / Std($close, 20)",             # Z-score
+    # "($high - $low) / Mean(($high - $low), 10)",                # 相对振幅
+    # "Corr($close, $volume, 10)",                                 # 价量10日相关
+    # "(WMA($close, 5) - WMA($close, 20)) / WMA($close, 20)",     # 双均线偏离
+    # "Ref($close, 5) / Mean($close, 5) - 1",                    # 5日前相对均线
+    # "$close / Ref($close, 252) - 1",                            # 12月动量
 ]
 
 
@@ -169,7 +120,7 @@ ACADEMIC_SEED_FRAGMENTS = [
 # ══════════════════════════════════════════════════════════════════════════════
 def make_target_alpha(df: pd.DataFrame) -> pd.DataFrame:
     """
-    已切换为原始 target_ret，对齐 WQ 评估口径。
+    已切换为直接使用原始 target_ret，对齐 WQ 评估口径。
     WQ 评估原始绝对收益 Sharpe，不做大盘剥离。
     """
     return df   # 直接返回，不做任何处理
@@ -247,7 +198,7 @@ def refine_candidates(top_individuals: list) -> list:
     refined_df = pipeline.run(
         enable_liquidity_filter=True,
         enable_robustify=True,
-        enable_neutralization=False,
+        enable_neutralization=False,   # 关闭：WQ 提交后自动做行业中性化，本地不做避免引入额外变换
     )
 
     b_results = {}
@@ -507,7 +458,6 @@ def main():
         val_start   = VAL_START,
         val_end     = VAL_END,
         dashboard   = dashboard,
-        novelty_delta = 0.0,
     )
 
     print("\n🌱 初始化种群...")
@@ -537,6 +487,32 @@ def main():
 
     # ── 输出建议 ──────────────────────────────────────────────────────────
     output_recommendations(oos_robust, is_only)
+
+    # ── WQ 自动提交（可选）────────────────────────────────────────────────
+    if ENABLE_WQ_SUBMIT and oos_robust:
+        try:
+            from wq_submit import submit_factors
+            # 构建提交列表：OOS 稳健因子的最终表达式
+            factor_list = []
+            for r in sorted(oos_robust,
+                            key=lambda x: x['oos_res'].get('fitness', 0), reverse=True):
+                is_r  = r['is_res']
+                oos_r = r['oos_res']
+                expr  = r['best_expr']
+                needs_neg = is_r.get('needs_negation', False)
+                wq_expr = f"-1 * ({expr})" if needs_neg else expr
+                factor_list.append({
+                    "wq_expr"  : wq_expr,
+                    "local_shp": oos_r.get('alpha_sharpe', 0),
+                    "label"    : r['name'][:35],
+                })
+            submit_factors(factor_list, auto_mode=True)
+        except ImportError:
+            print("\n⚠️ 未找到 wq_submit.py，跳过自动提交。")
+        except Exception as e:
+            print(f"\n⚠️ WQ 自动提交失败: {e}")
+    elif ENABLE_WQ_SUBMIT and not oos_robust:
+        print("\n⚠️ 无 OOS 稳健因子，跳过 WQ 提交。")
 
     print(f"\n⏱️  总耗时: {time.time() - t0:.1f} 秒")
 

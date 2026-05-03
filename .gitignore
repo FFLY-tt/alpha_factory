@@ -35,3 +35,5 @@ ch_logs/
 .cache/
 .joblib_temp/
 data/qlib_data/
+
+echo ".env" >> .gitignore
