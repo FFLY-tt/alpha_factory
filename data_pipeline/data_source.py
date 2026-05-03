@@ -6,14 +6,14 @@ import json
 import pandas as pd
 from qlib.data import D
 
-# ================= 核心修复防线 (Windows 终极保命符) =================
+# ================= 核心保命防线 (Windows 终极保命符) =================
 current_file_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_file_dir)
 custom_temp_dir = os.path.join(project_root, ".joblib_temp")
 os.makedirs(custom_temp_dir, exist_ok=True)
 os.environ['JOBLIB_TEMP_FOLDER'] = custom_temp_dir
 
-# 【新增】强行压制所有底层多线程/多进程库的并发数
+# 【新增】强行压制所有底层线程/多进程库的并发数
 os.environ["LOKY_MAX_CPU_COUNT"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -43,11 +43,11 @@ def fetch_factor_data(formulas_dict: dict, instrument_pool: str = "sp500",
                       start_date: str = "2018-01-01", end_date: str = "2019-12-31",
                       batch_size: int = 1000) -> pd.DataFrame:
     """
-    核心取数接口：分块将公式扔给 C++ 引擎，带有漂亮的进度条反馈
-    注意：target_ret 使用 T+1 收益，因子请使用当日可得信息（不要提前做 Ref 延迟，
+    核心取数接口：分块将公式丢给 C++ 引擎，带有异步的进度条反馈
+    注意：target_ret 使用 T+1 收益，因子要使用当日可得信息（不要提前做 Ref 延迟，
           如需实盘模拟，在管道中通过可选参数 lag=1 处理）。
     """
-    # 强制加入“明日收益”作为预测目标
+    # 强制加入"明日收益"作为预测目标
     formulas_dict["target_ret"] = "Ref($close, -1) / $close - 1"
 
     names = list(formulas_dict.keys())
@@ -73,10 +73,48 @@ def fetch_factor_data(formulas_dict: dict, instrument_pool: str = "sp500",
         df_batch.columns = batch_names
         all_dfs.append(df_batch)
 
-    print("\n🧩 计算完成，正在将所有数据块横向拼接到内存中，请稍候...")
-    final_df = pd.concat(all_dfs, axis=1)
+    import time
+    print("\n🧩 Qlib 底层计算完成！开始处理数据格式...")
+    t0 = time.time()
 
-    # 警告：此处不再做全局 shift，因子对齐已由 target_ret 定义保证
+    # ── 终极提速拼接与清洗逻辑 ────────────────────────────────────────────
+    if len(all_dfs) == 0:
+        raise ValueError("没有任何数据批次返回，请检查公式和时间范围")
+
+    elif len(all_dfs) == 1:
+        # 单批次（batch_size >= 公式总数时走这里）
+        # 用 reset_index 降维去重，绕开 MultiIndex.duplicated() 性能黑洞
+        final_df = all_dfs[0]
+        index_names = final_df.index.names
+        final_df = (final_df
+                    .reset_index()
+                    .drop_duplicates(subset=index_names, keep='first')
+                    .set_index(index_names)
+                    .sort_index())
+
+    else:
+        # 多批次：先清洗每批，再用索引交集对齐拼接
+        cleaned_dfs = []
+        for df in all_dfs:
+            index_names = df.index.names
+            df = (df.reset_index()
+                    .drop_duplicates(subset=index_names, keep='first')
+                    .set_index(index_names)
+                    .sort_index())
+            cleaned_dfs.append(df)
+
+        # 用交集作为基准（比最短索引更安全，避免丢数据）
+        base_index = cleaned_dfs[0].index
+        for df in cleaned_dfs[1:]:
+            base_index = base_index.intersection(df.index)
+
+        aligned_dfs = [df.reindex(base_index) for df in cleaned_dfs]
+        final_df = pd.concat(aligned_dfs, axis=1).copy()
+
+    t1 = time.time()
+    print(f"✅ 数据处理完毕！耗时: {t1-t0:.2f} 秒 | 数据形状: {final_df.shape}")
+    # ─────────────────────────────────────────────────────────────────────
+
     return final_df
 
 
@@ -107,7 +145,7 @@ def fetch_factor_data_with_cache(formulas_dict: dict, instrument_pool: str = "sp
                                  start_date: str = "2018-01-01", end_date: str = "2019-12-31",
                                  batch_size: int = 1000) -> pd.DataFrame:
     """
-    带有 MD5 哈希缓存的取数接口：算过的数据秒级加载，没算过的再去调用底层
+    带有 MD5 哈希缓存的取数接口：算过的数据级速加载，没算过的再去调底层
     """
     # 确保缓存目录存在
     cache_dir = os.path.join(os.path.dirname(__file__), "..", "..", ".cache")
@@ -125,10 +163,10 @@ def fetch_factor_data_with_cache(formulas_dict: dict, instrument_pool: str = "sp
         return pd.read_parquet(cache_file)
 
     # 3. 如果本地没有，老老实实调用原版函数去算
-    print("  🐌 未命中缓存，开始调用 Qlib 底层引擎...")
+    print("  🔄 本轮无缓存，开始调用 Qlib 底层引擎...")
     df = fetch_factor_data(formulas_dict, instrument_pool, start_date, end_date, batch_size)
 
-    # 4. 算完之后，立刻落盘存为 Parquet
+    # 4. 算完之后，立刻落盘存入 Parquet
     print(f"  💾 计算完毕，正在将中间矩阵保存至本地缓存: {cache_file}")
     df.to_parquet(cache_file)
 

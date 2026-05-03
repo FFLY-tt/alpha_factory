@@ -31,3 +31,7 @@ Thumbs.db
 
 ch_data/
 ch_logs/
+
+.cache/
+.joblib_temp/
+data/qlib_data/
