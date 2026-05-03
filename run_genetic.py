@@ -168,13 +168,11 @@ ACADEMIC_SEED_FRAGMENTS = [
 # ③ 辅助函数：target_alpha 计算
 # ══════════════════════════════════════════════════════════════════════════════
 def make_target_alpha(df: pd.DataFrame) -> pd.DataFrame:
-    """target_alpha = target_ret - 当日横截面等权市场均值"""
-    if 'target_ret' not in df.columns:
-        return df
-    df = df.copy()
-    market_ret = df['target_ret'].groupby(level='datetime').mean()
-    df['target_ret'] = df['target_ret'] - df.index.get_level_values('datetime').map(market_ret)
-    return df
+    """
+    已切换为原始 target_ret，对齐 WQ 评估口径。
+    WQ 评估原始绝对收益 Sharpe，不做大盘剥离。
+    """
+    return df   # 直接返回，不做任何处理
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -249,7 +247,7 @@ def refine_candidates(top_individuals: list) -> list:
     refined_df = pipeline.run(
         enable_liquidity_filter=True,
         enable_robustify=True,
-        enable_neutralization=True,
+        enable_neutralization=False,
     )
 
     b_results = {}

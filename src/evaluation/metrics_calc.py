@@ -262,6 +262,16 @@ def compute_factor_sharpe(
                 "turnover": 0.0, "high_turnover": False}
 
     data = data.copy()
+
+    # ── 步骤 3（DeepSeek）：提前淘汰无区分度因子 ─────────────────────────
+    # 因子值横截面标准差过小说明因子几乎恒定，分位选股无意义
+    factor_cross_std = data.groupby(level='datetime')[factor_name].std().mean()
+    if factor_cross_std < 1e-6:
+        return {"sharpe_gross": 0.0, "sharpe_net": 0.0,
+                "ann_ret": 0.0, "ann_vol": 0.0, "max_dd": 0.0,
+                "turnover": 0.0, "high_turnover": False}
+    # ─────────────────────────────────────────────────────────────────────
+
     data['quantile'] = data.groupby(level='datetime')[factor_name].transform(
         lambda x: pd.qcut(x, q=quantiles, labels=False, duplicates='drop')
     )
@@ -275,7 +285,7 @@ def compute_factor_sharpe(
 
     # 高换手时跳过成本扣除（避免成本模型失真导致负 Sharpe）
     if turnover > HIGH_TURN_IGNORE_COST:
-        ls_ret_net = ls_ret  # 不扣成本
+        ls_ret_net = ls_ret
         cost_model_reliable = False
     else:
         daily_cost = turnover * cost_bps / 10000
@@ -284,10 +294,17 @@ def compute_factor_sharpe(
 
     ann_ret_g = ls_ret.mean() * 252
     ann_ret_n = ls_ret_net.mean() * 252
-    ann_vol = ls_ret.std() * np.sqrt(252)
 
-    sharpe_g = float(ann_ret_g / ann_vol) if ann_vol > 0 else 0.0
-    sharpe_n = float(ann_ret_n / ann_vol) if ann_vol > 0 else 0.0
+    # ── 步骤 1（DeepSeek）：年化波动率下限 2%，防止除零/极小值导致 Sharpe 爆炸
+    MIN_ANN_VOL = 0.02
+    ann_vol = max(ls_ret.std() * np.sqrt(252), MIN_ANN_VOL)
+
+    sharpe_g = float(ann_ret_g / ann_vol)
+    sharpe_n = float(ann_ret_n / ann_vol)
+
+    # ── 步骤 2（DeepSeek）：Sharpe 截断 [-5, +5]，双重保险
+    sharpe_g = float(np.clip(sharpe_g, -5.0, 5.0))
+    sharpe_n = float(np.clip(sharpe_n, -5.0, 5.0))
 
     cum = (1 + ls_ret.fillna(0)).cumprod()
     max_dd = float((cum / cum.cummax() - 1).min())
@@ -345,66 +362,3 @@ def auto_correct_direction(
             "needs_negation":         False,
             "direction":              "原始方向（直接提交即可）"
         }
-
-
-# 将这部分追加到 src/evaluation/metrics_calc.py 的末尾
-
-from data_pipeline.data_source import fetch_factor_data
-
-
-def evaluate_single_factor_comprehensive(df: pd.DataFrame, factor_name: str) -> Dict:
-    """
-    单因子综合评估（含方向自动修正与复合 Fitness）
-    这是对外的标准评估组件，屏蔽底层各种零散算子。
-    """
-    metrics = compute_factor_sharpe(df, factor_name, quantiles=5, cost_bps=5.0)
-    mean_ic, icir = calculate_ic_stability(df, factor_name)
-    direction = auto_correct_direction(
-        ic=mean_ic,
-        sharpe_net=metrics['sharpe_net'],
-        sharpe_gross=metrics['sharpe_gross']
-    )
-    fit = calculate_local_fitness(
-        sharpe=direction['corrected_sharpe_net'],
-        turnover=metrics['turnover'],
-        max_corr=0.0,
-        icir=abs(icir)
-    )
-    return {
-        "sharpe_net_raw": metrics['sharpe_net'],
-        "sharpe_gross_raw": metrics['sharpe_gross'],
-        "sharpe_net": direction['corrected_sharpe_net'],
-        "sharpe_gross": direction['corrected_sharpe_gross'],
-        "needs_negation": direction['needs_negation'],
-        "direction_note": direction['direction'],
-        "ann_ret": metrics['ann_ret'],
-        "max_dd": metrics['max_dd'],
-        "turnover": metrics['turnover'],
-        "ic": mean_ic,
-        "icir": icir,
-        "fitness": fit['fitness'],
-        "high_turnover": metrics.get('high_turnover', False),
-    }
-
-
-def batch_evaluate_formulas(formulas: dict, pool: str, start_date: str, end_date: str) -> Dict[str, Dict]:
-    """
-    终极评估入口：接收公式字典，自动取数并返回全体评估报告。
-    """
-    if not formulas:
-        return {}
-
-    fetch_dict = dict(formulas)
-    # 强制加入成交量用于某些指标（如换手）的底层需求
-    if "_vol_raw_" not in fetch_dict:
-        fetch_dict["_vol_raw_"] = "$volume"
-
-    # 自动调用 Qlib 取数
-    df = fetch_factor_data(fetch_dict, pool, start_date, end_date)
-
-    results = {}
-    for fname in formulas.keys():
-        if fname in df.columns:
-            results[fname] = evaluate_single_factor_comprehensive(df, fname)
-
-    return results

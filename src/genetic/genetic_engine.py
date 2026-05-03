@@ -159,19 +159,15 @@ def compute_genetic_fitness(
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# target_alpha 计算
+# target_ret：使用原始收益（对齐 WQ 评估口径）
+# WQ 评估的是原始绝对收益 Sharpe，不做大盘剥离
 # ────────────────────────────────────────────────────────────────────────────
 def _make_target_alpha(df: pd.DataFrame) -> pd.DataFrame:
     """
-    target_alpha = target_ret – 当日横截面等权市场收益
-    结果覆盖 target_ret 列，现有评估函数无需修改。
+    已切换为直接使用原始 target_ret，不再剥离大盘均值。
+    保留函数名以避免修改所有调用处。
     """
-    if 'target_ret' not in df.columns:
-        return df
-    df = df.copy()
-    market_ret = df['target_ret'].groupby(level='datetime').mean()
-    df['target_ret'] = df['target_ret'] - df.index.get_level_values('datetime').map(market_ret)
-    return df
+    return df   # 直接返回，不做任何处理
 
 
 # ────────────────────────────────────────────────────────────────────────────
