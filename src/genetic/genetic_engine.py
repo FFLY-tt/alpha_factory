@@ -718,8 +718,13 @@ class GeneticEngine:
             })
 
         warnings_list = []
-        if diversity_corr < 0.15:
-            warnings_list.append("⚠️ 多样性过低（corr<0.15），种群可能坍缩")
+        # diversity_corr = 平均两两 Spearman 相关系数
+        # 接近 0 = 因子互不相关 = 多样性高（好）
+        # 接近 1 = 因子高度相关 = 多样性低（坏）
+        if diversity_corr > 0.7:
+            warnings_list.append(f"⚠️ 多样性过低（corr={diversity_corr:.2f}>0.7），种群可能坍缩")
+        elif diversity_corr > 0.5:
+            warnings_list.append(f"🟡 多样性偏低（corr={diversity_corr:.2f}），注意观察")
         if self.patience_counter >= 3:
             warnings_list.append(f"⚠️ 早停计数器 {self.patience_counter}/{self.patience}")
         if early_stop:
@@ -752,14 +757,17 @@ class GeneticEngine:
         }
 
     def _print_summary(self, g: dict) -> None:
-        health = ("🟢" if g['diversity_corr'] > 0.2 and g['val_best_fitness'] >= self.best_val_overall
-                  else "🟡" if g['diversity_corr'] > 0.1 else "🔴")
+        # diversity_corr 越低 = 因子越不相关 = 多样性越高（好）
+        dc = g['diversity_corr']
+        improving = g['val_best_fitness'] >= self.best_val_overall
+        health = ("🟢" if dc < 0.5 and improving
+                  else "🟡" if dc < 0.7 else "🔴")
         print(f"  {health} Gen={g['gen']:3d} | "
               f"Train_Fit={g['train_best_fitness']:+.4f} | "
               f"Val_Fit={g['val_best_fitness']:+.4f} | "
               f"Val_Best={g['val_best_overall']:+.4f} | "
               f"Patience={g['patience_counter']}/{self.patience} | "
-              f"Diversity={g['diversity_corr']:.3f}")
+              f"Diversity(corr)={dc:.3f}")
         if g['warnings']:
             for w in g['warnings']:
                 print(f"         {w}")
